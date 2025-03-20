@@ -69,7 +69,8 @@ class BinaryRecording(Recording):
         def __init__(self, info, base_directory, version, mmap_timestamps=True):
             
             directory = os.path.join(base_directory, 'continuous', info['folder_name'])
-
+            self.directory = directory
+            
             self.name = info['folder_name']
 
             self.metadata = {}
@@ -101,13 +102,83 @@ class BinaryRecording(Recording):
                 if version >= 0.6:
                     self.sample_numbers = np.load(os.path.join(directory, 'sample_numbers.npy'), mmap_mode=self.mmap_mode)
                     self.timestamps = np.load(os.path.join(directory, 'timestamps.npy'), mmap_mode=self.mmap_mode)
+                    # Open ephys sometimes makes corrupt timestamps, we want to check that here and fix them
+                    self._check_timestamps()
                 else:
                     self.sample_numbers = np.load(os.path.join(directory, 'timestamps.npy'), mmap_mode=self.mmap_mode)
             except FileNotFoundError as e:
                 if os.path.basename(e.filename) == 'sample_numbers.npy':
                     self.sample_numbers = np.arange(self.samples.shape[0])
 
-            self.global_timestamps = None
+            # Check for saved global timestamps
+            if os.path.isfile(os.path.join(directory, 'global_timestamps.npy')):
+                self.global_timestamps = np.load(os.path.join(directory, 'global_timestamps.npy'), 
+                                                 mmap_mode=self.mmap_mode)
+            else:
+                self.global_timestamps = None
+
+
+        def get_data(self, start_time, end_time=None, length=None, channels=0):
+            """
+            Returns samples scaled to microvolts. Converts sample values
+            from 16-bit integers to 64-bit floats.
+            Finds the sample to fetch by looking for global timestamps 
+            or if not available standard timestamps
+    
+            """
+            import numpy as np
+            
+            # Determine the end time if not provided
+            if end_time is None:
+                if length is None:
+                    length = 2.0  # Default to 2 seconds
+                end_time = start_time + length
+            
+            # Get the timestamps from the memory mapped data
+            if self.global_timestamps is None:
+                timestamps = self.timestamps
+            else: 
+                timestamps = self.global_timestamps
+
+            # Find the indices that correspond to the start and end times
+            # using binary search or numpy searchsorted for efficiency
+
+            start_index = np.searchsorted(timestamps, start_time, side='left')
+            end_index = np.searchsorted(timestamps, end_time, side='right')
+            
+            # Handle edge cases
+            if start_index >= len(timestamps):
+                raise ValueError(f"Start time {start_time} is beyond the available data range")
+            
+            if end_index > len(timestamps):
+                end_index = len(timestamps)
+            
+            if start_index == end_index:
+                end_index = start_index + 1  # Ensure we get at least one sample
+            
+            # Prepare the channels parameter as a numpy array
+            if isinstance(channels, (int, np.integer)):
+                selected_channels = np.array([channels], dtype=int)
+            elif isinstance(channels, (list, tuple)):
+                selected_channels = np.array(channels, dtype=int)
+            elif isinstance(channels, np.ndarray):
+                # Ensure the array is of integer type
+                selected_channels = channels.astype(int)
+            else:
+                raise TypeError("Channels must be an int, list, tuple, or numpy array")
+            
+            # Validate channels
+            num_channels = self.metadata['num_channels']
+            for channel in selected_channels:
+                if not 0 <= channel < num_channels:
+                    raise ValueError(f"Channel {channel} is out of range. Valid range is 0 to {num_channels-1}")
+            
+            samples     = self.get_samples(start_index, end_index, selected_channels)
+            sample_time = timestamps[start_index:end_index]
+
+            return samples, sample_time
+
+
 
         def get_samples(self, start_sample_index, end_sample_index, selected_channels=None):
             """
@@ -139,6 +210,107 @@ class BinaryRecording(Recording):
                 samples[:,idx] = samples[:,idx] * self.metadata['bit_volts'][channel]
 
             return samples
+
+        def _check_timestamps(self, sample_size=100000):
+            """
+            Checks for discontinuities in timestamps array.
+            If discontinuities are found, regenerates timestamps from sample numbers,
+            backs up the original timestamps file, and writes the new timestamps.
+            
+            Returns
+            -------
+            bool
+                True if timestamps were corrupted and fixed, False otherwise
+            """
+            # Check if timestamps exist
+            if not hasattr(self, 'timestamps') or self.timestamps is None:
+                return False
+                
+            # Check for discontinuities in timestamps
+            if len(self.timestamps) <= 1:
+                return False  # Not enough timestamps to check for discontinuities
+                
+            # if memory mapped just load a sub sample
+            if self.mmap_mode == 'r':
+                # Calculate differences between a sample of timestamps
+                timestamp_diffs = np.diff(self.timestamps[0:min(sample_size,len(self.timestamps))])
+            else: 
+                # Calculate differences between consecutive timestamps
+                timestamp_diffs = np.diff(self.timestamps)
+                
+            # Calculate the median difference (expected time between samples)
+            median_diff = np.median(timestamp_diffs)
+            
+            # Check for significant deviations from the expected difference
+            # (allowing for small floating-point variations)
+            tolerance = 0.1 * median_diff  # 10% tolerance
+            is_corrupted = np.any(np.abs(timestamp_diffs - median_diff) > tolerance)
+            
+            if is_corrupted:
+                print(f"Discontinuities detected in timestamps for {self.name}. Regenerating timestamps...")
+                
+                # Generate new timestamps from sample numbers and sampling rate
+                new_timestamps = self.sample_numbers / self.metadata['sample_rate']
+                
+                # Backup the original timestamps file
+                timestamps_file = os.path.join(self.directory, 'timestamps.npy')
+                backup_file = os.path.join(self.directory, 'timestamps.npy.bkup')
+                
+                # Check if backup already exists to avoid overwriting previous backups
+                backup_index = 1
+                while os.path.exists(backup_file):
+                    backup_file = os.path.join(self.directory, f'timestamps.npy.bkup{backup_index}')
+                    backup_index += 1
+                
+                # Copy the original file to backup
+                import shutil
+                shutil.copy2(timestamps_file, backup_file)
+                print(f"Original timestamps backed up to {backup_file}")
+
+                # Save the new timestamps
+                np.save(timestamps_file, new_timestamps)
+                print(f"New timestamps saved to {timestamps_file}")
+                
+                # Update the timestamps in memory
+                if self.mmap_mode is None:
+                    self.timestamps = new_timestamps
+                else:
+                    # Reload the timestamps with the specified mmap_mode
+                    self.timestamps = np.load(timestamps_file, mmap_mode=self.mmap_mode)
+
+                # Try and do the same for any related event files
+                # This is a little hacky, should actually change the events 
+                # to be a proper object like the continuos data streams
+                event_path = self.directory.replace('continuous', 'events') + 'TTL'
+                event_samples_path    = os.path.join(event_path,'sample_numbers.npy')
+                if os.path.exists(event_samples_path):
+                    event_timestamps = np.load(event_samples_path)
+                    # Generate new timestamps from sample numbers and sampling rate
+                    new_event_timestamps = event_timestamps / self.metadata['sample_rate']
+                
+                    # Backup the original timestamps file
+                    event_timestamps_path = os.path.join(event_path,'timestamps.npy')
+                    event_backup_file = os.path.join(event_path, 'timestamps.npy.bkup')
+                
+                    # Check if backup already exists to avoid overwriting previous backups
+                    event_backup_index = 1
+                    while os.path.exists(event_backup_file):
+                        event_backup_file = os.path.join(event_path, f'timestamps.npy.bkup{event_backup_index}')
+                        event_backup_index += 1
+                
+                    # Copy the original file to backup
+                    import shutil
+                    shutil.copy2(event_timestamps_path, event_backup_file)
+                    print(f"Original event timestamps backed up to {event_backup_file}")
+
+                    # Save the new timestamps
+                    np.save(event_timestamps_path, new_event_timestamps)
+                    print(f"New event timestamps saved to {event_timestamps_path}")
+
+                return True
+            
+            return False
+
     
     def __init__(self, directory, experiment_index=0, recording_index=0, mmap_timestamps=True):
         
@@ -148,7 +320,7 @@ class BinaryRecording(Recording):
             self.info = json.load(oebin_file)
        self._format = 'binary'
        self._version = float(".".join(self.info['GUI version'].split('.')[:2]))
-       self.sort_events = True
+       self.sort_events = True       
        
     def load_continuous(self):
         
@@ -201,32 +373,95 @@ class BinaryRecording(Recording):
                 sample_numbers = np.load(os.path.join(events_directory, 'timestamps.npy'))
                 timestamps = np.ones(sample_numbers.shape) * -1
         
-            df.append(pd.DataFrame(data = {'line' : np.abs(channels),
-                              'sample_number' : sample_numbers,
-                              'timestamp' : timestamps,
-                              'processor_id' : [nodeId] * len(channels),
-                              'stream_index' : [streamIdx] * len(channels),
-                              'stream_name' : [stream] * len(channels),
-                              'state' : (channels > 0).astype('int')}))
-            
+            # Try to get global time stamps too
+            global_filepath = os.path.join(events_directory, 'global_timestamps.npy')
+            if os.path.exists(global_filepath):
+                global_timestamps = np.load(global_filepath)
+            else:
+                global_timestamps = np.ones_like(timestamps) * np.nan
+
+            # Convert on off states to durations
+            if channels.size > 0:        
+                states = channels
+                channels = np.unique(np.abs(channels))            
+                if states.size > 0:                
+                    
+                    rising_indices = []
+                    falling_indices = []
+
+                    for channel in channels:
+                        # Find rising and falling edges for each channel
+                        rising = np.where(states == channel)[0]
+                        falling = np.where(states == -channel)[0]
+
+                        # Ensure each rising has a corresponding falling
+                        if rising.size > 0 and falling.size > 0:
+                            if rising[0] > falling[0]:
+                                falling = falling[1:]
+                            if rising.size > falling.size:
+                                rising = rising[:-1]
+
+                            # # ensure that the number of rising and falling edges are the same:
+                            # if len(rising) != len(falling):
+                            #     print(
+                            #         f"Channel {channel} has {len(rising)} rising edges and "
+                            #         f"{len(falling)} falling edges. The number of rising and "
+                            #         f"falling edges should be equal. Skipping events from this channel."
+                            #     )
+                            #     continue
+
+
+                        durations = sample_numbers[falling] - sample_numbers[rising]
+                        durations = durations / self.continuous[0].metadata["sample_rate"]
+                        channel_samples = sample_numbers[rising]
+                        channel_timestamps = timestamps[rising]        
+                        channel_global_timestamps = global_timestamps[rising]            
+
+                        df.append(pd.DataFrame(data = {'line' :  [channel] * len(durations),
+                                        'sample_number' : channel_samples,                        
+                                        'timestamp' : channel_timestamps,
+                                        'global_timestamp' : channel_global_timestamps,
+                                        'duration' : durations,
+                                        'processor_id' : [nodeId] * len(durations),
+                                        'stream_index' : [streamIdx] * len(durations),
+                                        'stream_name' : [stream] * len(durations)}
+                                        ))
+
+
+
         if len(df) > 0:
 
             self._events = pd.concat(df)
 
             if self.sort_events:
                 if self._version >= 0.6:                  
-                    self._events.sort_values(by=['timestamp', 'stream_index'], 
+                    self._events.sort_values(by=['stream_index', 'sample_number'], 
                                              ignore_index=True,
                                              inplace=True)
                 else:
-                    self._events.sort_values(by=['sample_number','stream_index'], 
+                    self._events.sort_values(by=['stream_index', 'sample_number'], 
                                              ignore_index=True,
                                              inplace=True)
-
+        
         else:
             
             self._events = None
     
+    def load_barcode_data(self):
+        self.barcode_data = {}
+        loaded_barcodes = True
+        for continuous in self.continuous:                
+            if os.path.isfile(os.path.join(continuous.directory,'barcodes.npy')):
+                barcodes = np.load(os.path.join(continuous.directory,'barcodes.npy'))
+                # assign to self - get key first
+                stream_name = continuous.metadata['stream_name']
+                node_id = continuous.metadata['source_node_id']
+                self.barcode_data[(node_id, stream_name)] = barcodes
+            else: 
+                loaded_barcodes = False
+        return loaded_barcodes
+        
+
     def load_messages(self):
         
         if self._version >= 0.6:
@@ -394,7 +629,3 @@ class BinaryRecording(Recording):
             output_path, 
             'structure.oebin'), "w") as outfile:
             outfile.write(json.dumps(output, indent=4))
-
-
-
-        
