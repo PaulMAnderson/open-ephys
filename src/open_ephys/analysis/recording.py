@@ -286,7 +286,10 @@ class Recording(ABC):
         
         for i,c in enumerate(channel_names):
             if c.startswith('CH'):
-                ch_id = int(c.lstrip('CH'))
+                try:
+                    ch_id = int(c.lstrip('CH'))
+                except:
+                    ch_id = i+1
             elif c.startswith('ADC'):
                 ch_id = i+1
             else:
