@@ -263,32 +263,39 @@ class BinaryRecording(Recording):
             # Check if timestamps exist
             if not hasattr(self, 'timestamps') or self.timestamps is None:
                 return False
-                
+
+           # Check if timestamps start at zero
+            starts_at_zero = self.timestamps[0] == 0
+            is_corrupted = False
+
             # Check for discontinuities in timestamps
-            if len(self.timestamps) <= 1:
-                return False  # Not enough timestamps to check for discontinuities
+            if starts_at_zero: # Check for discontinuities in timestamps
+                if len(self.timestamps) <= 1:
+                    return False  # Not enough timestamps to check for discontinuities
+                    
+                # if memory mapped just load a sub sample
+                if self.mmap_mode == 'r':
+                    # Calculate differences between a sample of timestamps
+                    timestamp_diffs = np.diff(self.timestamps[0:min(sample_size,len(self.timestamps))])
+                else: 
+                    # Calculate differences between consecutive timestamps
+                    timestamp_diffs = np.diff(self.timestamps)
+                    
+                # Calculate the median difference (expected time between samples)
+                median_diff = np.median(timestamp_diffs)
                 
-            # if memory mapped just load a sub sample
-            if self.mmap_mode == 'r':
-                # Calculate differences between a sample of timestamps
-                timestamp_diffs = np.diff(self.timestamps[0:min(sample_size,len(self.timestamps))])
-            else: 
-                # Calculate differences between consecutive timestamps
-                timestamp_diffs = np.diff(self.timestamps)
-                
-            # Calculate the median difference (expected time between samples)
-            median_diff = np.median(timestamp_diffs)
+                # Check for significant deviations from the expected difference
+                # (allowing for small floating-point variations)
+                tolerance = 0.1 * median_diff  # 10% tolerance
+                is_corrupted = np.any(np.abs(timestamp_diffs - median_diff) > tolerance)
             
-            # Check for significant deviations from the expected difference
-            # (allowing for small floating-point variations)
-            tolerance = 0.1 * median_diff  # 10% tolerance
-            is_corrupted = np.any(np.abs(timestamp_diffs - median_diff) > tolerance)
-            
-            if is_corrupted:
+            if is_corrupted or  ~starts_at_zero:
                 print(f"Discontinuities detected in timestamps for {self.name}. Regenerating timestamps...")
                 
                 # Generate new timestamps from sample numbers and sampling rate
-                new_timestamps = self.sample_numbers / self.metadata['sample_rate']
+                # new_timestamps = self.sample_numbers / self.metadata['sample_rate']
+                sample_range = np.arange(len(self.timestamps))
+                new_timestamps = sample_range / self.metadata['sample_rate']
                 
                 # Backup the original timestamps file
                 timestamps_file = os.path.join(self.directory, 'timestamps.npy')
@@ -322,7 +329,9 @@ class BinaryRecording(Recording):
                 event_path = self.directory.replace('continuous', 'events') + 'TTL'
                 event_samples_path    = os.path.join(event_path,'sample_numbers.npy')
                 if os.path.exists(event_samples_path):
-                    event_timestamps = np.load(event_samples_path)
+                    start_sample = self.sample_numbers[0]
+                    event_timestamps = np.load(event_samples_path) - start_sample
+
                     # Generate new timestamps from sample numbers and sampling rate
                     new_event_timestamps = event_timestamps / self.metadata['sample_rate']
                 
@@ -382,6 +391,9 @@ class BinaryRecording(Recording):
 
     
     def load_events(self):
+
+        import numpy as np
+
         search_string = os.path.join(self.directory,
                                     'events',
                                     '*',
@@ -417,6 +429,12 @@ class BinaryRecording(Recording):
                 global_timestamps = np.load(global_filepath)
             else:
                 global_timestamps = np.ones_like(timestamps) * np.nan
+
+            # Find the matching continuous data to check for stream length   
+            cont_samples = False         
+            for cont in self.continuous:
+                if cont.metadata['source_node_id'] == nodeId:
+                    cont_samples = cont.sample_numbers
 
             # Convert on off states to durations
             if channels.size > 0:        
@@ -455,8 +473,15 @@ class BinaryRecording(Recording):
                         channel_timestamps = timestamps[rising]        
                         channel_global_timestamps = global_timestamps[rising]            
 
+                        if cont_samples is not False:
+                            # Find indices
+                            # indices = np.where(np.isin(cont_samples, channel_samples))[0]
+                            # Faster method
+                            indices = channel_samples - cont_samples[0]
+
                         df.append(pd.DataFrame(data = {'line' :  [channel] * len(durations),
-                                        'sample_number' : channel_samples,                        
+                                        'sample_number' : channel_samples,  
+                                        'sample_index'  : indices,                      
                                         'timestamp' : channel_timestamps,
                                         'global_timestamp' : channel_global_timestamps,
                                         'duration' : durations,

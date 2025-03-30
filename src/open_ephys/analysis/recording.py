@@ -431,9 +431,9 @@ class Recording(ABC):
         Identify event lines that contain synchronization barcodes across all streams.
         
         Barcodes are characterized by:
-        - Starting with 3 x 10ms on-off pulses
+        - Starting with 1+ 10ms on-off pulses
         - Followed by 32-bit code of 30ms on-off pulses
-        - Ending with 3 x 10ms on-off pulses
+        - Ending with 1+ 10ms on-off pulses
         
         Returns
         -------
@@ -646,18 +646,17 @@ class Recording(ABC):
 
             if key == main_key:
                 # assign the raw timestamps as global timestamps if this is the main key
-                continuous.global_timestamps = continuous.timestamps                                            
+                continuous.global_timestamps = np.array(continuous.timestamps)
                 self.synchronize_events(continuous, interp_func)
                 continue
 
             # Use interpolation to align timestamps
-            # Calculate sample numbers for each timestamp
-            sample_rate = continuous.metadata['sample_rate']
-            # Can't use actual timestamps as they are often corrupted, using sample numbers instead
-            timestamps = continuous.sample_numbers / sample_rate
-
-            # Apply interpolation to all timestamps
-            continuous.global_timestamps = interp_func(timestamps)            
+            timestamps = continuous.timestamps
+            continuous.global_timestamps = interp_func(timestamps)
+            # # Calculate sample numbers for each timestamp
+            # sample_rate = continuous.metadata['sample_rate']
+            # # Can't use actual timestamps as they are often corrupted, using sample numbers instead
+            # timestamps = continuous.sample_numbers / sample_rate      
             
             # Attempt to fix the event timestamps
             self.synchronize_events(continuous, interp_func)
@@ -868,10 +867,9 @@ class Recording(ABC):
                 continue
             
             # Save global timestamps
-            global_timestamp_file = os.path.join(continuous.directory, 'global_timestamps.npy')
-            np.save(global_timestamp_file, continuous.global_timestamps)
-            
-            print(f"Saved global timestamps for stream {continuous.metadata['stream_name']} to {global_timestamp_file}")
+            global_file = os.path.join(continuous.directory, 'global_timestamps.npy')
+            np.save(global_file, continuous.global_timestamps)
+            print(f"Saved global timestamps for stream {continuous.metadata['stream_name']} to {global_file}")
         
         # Save barcode information if available
         if hasattr(self, 'barcode_data'):
@@ -991,14 +989,95 @@ class Recording(ABC):
         # Maybe make a full class analgous to the continuous one?
         event_path = continuous.directory.replace('continuous', 'events') + 'TTL'
         if os.path.exists(event_path):
-            # timestamps_file = os.path.join(event_path, 'timestamps.npy')
-            samples    = np.load(os.path.join(event_path,'sample_numbers.npy'))
-            new_timestamps = samples / continuous.metadata['sample_rate']
+            timestamps = np.load(os.path.join(event_path, 'timestamps.npy'))
+            # Alternative method where we regenerate timestamps
+            # not needed as we already do this now
+            # samples    = np.load(os.path.join(event_path,'sample_numbers.npy'))
+            # new_timestamps = samples / continuous.metadata['sample_rate']
 
             # Convert timestamps to global timestamps
-            global_timestamps = interp_func(new_timestamps)
+            global_timestamps = interp_func(timestamps)
 
             # Save the global timestamps
             global_file = os.path.join(event_path, 'global_timestamps.npy')
             np.save(global_file, global_timestamps)
-            print(f"New global timestamps saved to {global_file}")
+            print(f"New global event timestamps saved to {global_file}")
+
+    def concatenate_events(self, other, save_data=True, output_dir=None):
+        import pandas as pd
+        """
+        Attempts to concatenate event data between two recordings
+        """
+
+        stream_data = []
+        for stream in self.continuous:
+            stream_name = stream.metadata['stream_name']
+            node_id     = stream.metadata['source_node_id']
+            node_name   = stream.metadata['source_node_name']
+            num_samples = len(stream.sample_numbers)
+            stream_data.append({
+                'stream_name':stream_name,
+                'node_id':node_id,
+                'node_name':node_name,
+                'num_sample':num_samples,
+                'last_timestamp':stream.timestamps[-1],
+                'last_global_timestamp':stream.global_timestamps[-1]
+            })
+
+        other_events = other.events
+
+        # Initialize an empty list to collect processed event
+        processed_events = []
+            
+        # Iterate through unique stream names
+        for stream_info in stream_data:
+            stream_name = stream_info['stream_name']
+            num_samples = stream_info['num_sample']
+            last_timestamp = stream_info['last_timestamp']
+            last_global_timestamp = stream_info['last_global_timestamp']
+
+            # Subset the DataFrame for the current stream
+            stream_events = other_events[other_events['stream_name'] == stream_name].copy()
+            
+            # Add samples tom sampl_index column
+            stream_events['sample_index'] += num_samples
+            # Add time offset to timestamp column
+            stream_events['timestamp'] += last_timestamp
+            # Add time offset to global_timestamp column
+            stream_events['global_timestamp'] += last_global_timestamp
+            
+            # Append the modified subset to the list
+            processed_events.append(stream_events)
+
+        # Combine all processed DataFrames
+        other_events  = pd.concat(processed_events, ignore_index=True)
+        all_events = pd.concat([self.events, other_events], ignore_index=True)
+        all_events = all_events.sort_values(by=['stream_index','sample_index']).reset_index(drop=True)
+
+        if save_data:
+            # Check output directory
+            if output_dir is None:
+                import open_ephys.analysis as oe
+                # Find the parent directory of this recording and write the data there
+                # This is going to be a bit hacky...
+                sesh_dir = os.path.dirname(os.path.dirname(os.path.dirname(self.directory)))
+                # Check it by running Session
+                try:
+                    if oe.Session(sesh_dir):
+                        output_dir = os.path.dirname(sesh_dir)
+                except:                
+                    output_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(self.directory))))
+                    print('Not sure about path accuracy...')
+
+
+            # Save events to csv
+            filename_csv = os.path.join(output_dir, 'all_events.csv')
+            all_events.to_csv(filename_csv, index=False)
+            print(f"saved all events to .csv at {filename_csv}")
+
+            # 2. Parquet - High performance, columnar storage
+            filename_parquet = os.path.join(output_dir, 'all_events.parquet')
+            all_events.to_parquet(filename_parquet, engine='pyarrow')
+            print(f"saved all events to .parquet at {filename_parquet}")
+
+        return all_events
