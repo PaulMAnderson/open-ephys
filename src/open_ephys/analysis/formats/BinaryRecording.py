@@ -31,33 +31,59 @@ import json
 from open_ephys.analysis.recording import Recording
 from open_ephys.analysis.utils import alphanum_key
 
-class BinaryRecording(Recording):
-    
-    class Spikes:
-        
-        def __init__(self, info, base_directory, version):
-        
-            self.metadata = { }
 
-            self.metadata['name'] = info['name']
-            self.metadata['stream_name'] = info['stream_name']
-            self.metadata['sample_rate'] = info['sample_rate']
-            self.metadata['num_channels'] = info['num_channels']
-            
+class BinaryRecording(Recording):
+
+    class Spikes:
+
+        def __init__(self, info, base_directory, version):
+
+            self.metadata = {}
+
+            self.metadata["name"] = info["name"]
+            self.metadata["stream_name"] = info["stream_name"]
+            self.metadata["sample_rate"] = info["sample_rate"]
+            self.metadata["num_channels"] = info["num_channels"]
+
             if version >= 0.6:
-                directory = os.path.join(base_directory, 'spikes', info['folder'])
-                self.sample_numbers = np.load(os.path.join(directory, 'sample_numbers.npy'), mmap_mode='r')
-                self.timestamps = np.load(os.path.join(directory, 'timestamps.npy'), mmap_mode='r')
-                self.electrodes = np.load(os.path.join(directory, 'electrode_indices.npy'), mmap_mode='r') - 1
-                self.waveforms = np.load(os.path.join(directory, 'waveforms.npy')).astype('float64')
-                self.clusters = np.load(os.path.join(directory, 'clusters.npy'), mmap_mode='r')
+                directory = os.path.join(base_directory, "spikes", info["folder"])
+                self.sample_numbers = np.load(
+                    os.path.join(directory, "sample_numbers.npy"), mmap_mode="r"
+                )
+                self.timestamps = np.load(
+                    os.path.join(directory, "timestamps.npy"), mmap_mode="r"
+                )
+                self.electrodes = (
+                    np.load(
+                        os.path.join(directory, "electrode_indices.npy"), mmap_mode="r"
+                    )
+                    - 1
+                )
+                self.waveforms = np.load(
+                    os.path.join(directory, "waveforms.npy")
+                ).astype("float64")
+                self.clusters = np.load(
+                    os.path.join(directory, "clusters.npy"), mmap_mode="r"
+                )
 
             else:
-                directory = os.path.join(base_directory, 'spikes', info['folder_name'])
-                self.sample_numbers = np.load(os.path.join(directory, 'spike_times.npy'), mmap_mode='r')
-                self.electrodes = np.load(os.path.join(directory, 'spike_electrode_indices.npy'), mmap_mode='r') - 1
-                self.waveforms = np.load(os.path.join(directory, 'spike_waveforms.npy')).astype('float64')
-                self.clusters = np.load(os.path.join(directory, 'spike_clusters.npy'), mmap_mode='r')
+                directory = os.path.join(base_directory, "spikes", info["folder_name"])
+                self.sample_numbers = np.load(
+                    os.path.join(directory, "spike_times.npy"), mmap_mode="r"
+                )
+                self.electrodes = (
+                    np.load(
+                        os.path.join(directory, "spike_electrode_indices.npy"),
+                        mmap_mode="r",
+                    )
+                    - 1
+                )
+                self.waveforms = np.load(
+                    os.path.join(directory, "spike_waveforms.npy")
+                ).astype("float64")
+                self.clusters = np.load(
+                    os.path.join(directory, "spike_clusters.npy"), mmap_mode="r"
+                )
 
             if self.waveforms.ndim == 2:
                 self.waveforms = np.expand_dims(self.waveforms, 1)
@@ -76,40 +102,56 @@ class BinaryRecording(Recording):
             self.metadata = {}
 
             if mmap_timestamps:
-                self.mmap_mode = 'r'
+                self.mmap_mode = "r"
             else:
                 self.mmap_mode = None
 
-            self.metadata['source_node_id'] = info['source_processor_id']
-            self.metadata['source_node_name'] = info['source_processor_name']
+            self.metadata["source_node_id"] = info["source_processor_id"]
+            self.metadata["source_node_name"] = info["source_processor_name"]
 
             if version >= 0.6:
-                self.metadata['stream_name'] = info['stream_name']
+                self.metadata["stream_name"] = info["stream_name"]
             else:
-                self.metadata['stream_name'] = str(info['source_processor_sub_idx'])
+                self.metadata["stream_name"] = str(info["source_processor_sub_idx"])
 
-            self.metadata['sample_rate'] = info['sample_rate']
-            self.metadata['num_channels'] = info['num_channels']
+            self.metadata["sample_rate"] = info["sample_rate"]
+            self.metadata["num_channels"] = info["num_channels"]
 
-            self.metadata['channel_names'] = [ch['channel_name'] for ch in info['channels']]
-            self.metadata['channel_map'] = Recording.create_channel_map(info)
+            self.metadata["channel_names"] = [
+                ch["channel_name"] for ch in info["channels"]
+            ]
+            self.metadata["bit_volts"] = [ch["bit_volts"] for ch in info["channels"]]
 
-            self.metadata['bit_volts'] = [ch['bit_volts'] for ch in info['channels']]
-
-            data = np.memmap(os.path.join(directory, 'continuous.dat'), mode='r', dtype='int16')
-            self.samples = data.reshape((len(data) // self.metadata['num_channels'], 
-                                         self.metadata['num_channels']))
+            data = np.memmap(
+                os.path.join(directory, "continuous.dat"), mode="r", dtype="int16"
+            )
+            self.samples = data.reshape(
+                (
+                    len(data) // self.metadata["num_channels"],
+                    self.metadata["num_channels"],
+                )
+            )
 
             try:
                 if version >= 0.6:
-                    self.sample_numbers = np.load(os.path.join(directory, 'sample_numbers.npy'), mmap_mode=self.mmap_mode)
-                    self.timestamps = np.load(os.path.join(directory, 'timestamps.npy'), mmap_mode=self.mmap_mode)
-                    # Open ephys sometimes makes corrupt timestamps, we want to check that here and fix them
+                    self.sample_numbers = np.load(
+                    	os.path.join(directory, 'sample_numbers.npy'), 
+                    	mmap_mode=self.mmap_mode)
+                    self.timestamps = np.load(
+                    	os.path.join(directory, 'timestamps.npy'), 
+                    	mmap_mode=self.mmap_mode)
+                    
+                    # Open ephys sometimes makes corrupt timestamps, 
+                    # we want to check that here and fix them
                     self._check_timestamps()
+                    
                 else:
-                    self.sample_numbers = np.load(os.path.join(directory, 'timestamps.npy'), mmap_mode=self.mmap_mode)
+                    self.sample_numbers = np.load(
+                        os.path.join(directory, "timestamps.npy"),
+                        mmap_mode=self.mmap_mode,
+                    )
             except FileNotFoundError as e:
-                if os.path.basename(e.filename) == 'sample_numbers.npy':
+                if os.path.basename(e.filename) == "sample_numbers.npy":
                     self.sample_numbers = np.arange(self.samples.shape[0])
 
             # Check for saved global timestamps
@@ -182,7 +224,13 @@ class BinaryRecording(Recording):
 
 
 
-        def get_samples(self, start_sample_index, end_sample_index, selected_channels=None, *, channel_by_number = None):
+        def get_samples(
+            self,
+            start_sample_index,
+            end_sample_index,
+            selected_channels=None,
+            selected_channel_names=None,
+        ):
             """
             Returns samples scaled to microvolts. Converts sample values
             from 16-bit integers to 64-bit floats.
@@ -194,17 +242,11 @@ class BinaryRecording(Recording):
             end_sample_index : int
                 Index of the last sample to return
             selected_channels : numpy.ndarray, optional
-                Array index of data to extract. The channel you will be returned is 
-                the argument+1 as arrays are zero-indexed. Internally, the channel returned 
-                will be looked up as described in ``channel_by_number``.
-            channel_by_number : numpy.ndarray, optional 
-                Channel number(s) that you request. The array index is looked-up from a 
-                dict that translates the channel ID (an interger of version of channel
-                name where ``'CH22' = 22``)  to the index of the storage array.
-                Order is kept consisitent with the **Channel Map** plugin as recorded in the 
-`               ``oebin`` file. By default, all channels are returned. If you board has 
-                additional ``ADCn`` channels, they are sequentially numbered after reaching
-                the last ``CHnn`` labeled channel. 
+                Selects a subset of channels to return based on index.
+                If no channels are selected, all channels are returned.
+            selected_channel_names : List[str], optional
+                Selects a subset of channels to return based on name.
+                If no channels are selected, all channels are returned.
 
             Returns
             -------
@@ -212,40 +254,29 @@ class BinaryRecording(Recording):
 
             """
 
-            if selected_channels and channel_by_number:
-                raise ValueError("Cannot use both ``selected_channels`` and ``channel_by_number`` channel selection methods") 
-            elif selected_channels and not channel_by_number:
-                print("WARNING: You are selecting channels by array index, not channel ID!\n"
-                      "         Channel number will be the array index +1 by default\n"
-                      "         Use ``channel_by_number`` keyword to select channels by ID\n"
-                      "           This is important when channel ordering has changed due to\n"
-                      "           the use of the channel selector plugin.")
+            if selected_channels is not None and selected_channel_names is not None:
+                raise ValueError(
+                    "Cannot specify both `selected_channels`" +
+                    " and `selected_channel_names` as input arguments"
+                )
 
-                if type(selected_channels) is int:
-                    selected_channels = np.array([selected_channels],dtype=np.uint32)
-                    selected_channels += 1 
-                elif isinstance(np.ndarray,type(selected_channels)):
-                    selected_channels += 1 
-                else:
-                    selected_channels = np.array(selected_channels,dtype=np.uint32)
-                    selected_channels += 1 
-            elif not selected_channels and channel_by_number:
-                if type(channel_by_number) is int:
-                    selected_channels = np.array([channel_by_number],dtype=np.uint32)
-                elif isinstance(np.ndarray,type(channel_by_number)):
-                    pass
-                else:
-                    selected_channels = np.array(channel_by_number,dtype=np.uint32)
-            else:
-                selected_channels = np.arange(self.metadata['num_channels'],dtype=np.uint32)
-                selected_channels += 1 #change index to match channel ID, not array index
+            if selected_channels is None and selected_channel_names is None:
+                selected_channels = np.arange(
+                    self.metadata["num_channels"], dtype=np.uint32
+                )
 
-            selected_ch = np.array([ self.metadata['channel_map'][ch] for ch in selected_channels ],dtype=np.uint32)
+            if selected_channel_names is not None:
+                selected_channels = [self.metadata['channel_names'].index(value) 
+                                     for value in selected_channel_names]
+                selected_channels = np.array(selected_channels, dtype=np.uint32)
 
-            samples = self.samples[start_sample_index:end_sample_index, selected_ch].astype('float64')
+            samples = self.samples[
+                start_sample_index:end_sample_index, selected_channels
+            ].astype("float64")
 
-            for idx, ch in enumerate(selected_ch):
-                samples[:,idx] = samples[:,idx] * self.metadata['bit_volts'][ch]
+            for idx, ch in enumerate(selected_channels):
+                samples[:, idx] = samples[:, idx] * \
+                    self.metadata["bit_volts"][ch]
 
             return samples
 
@@ -358,40 +389,54 @@ class BinaryRecording(Recording):
             
             return False
 
-    
-    def __init__(self, directory, experiment_index=0, recording_index=0, mmap_timestamps=True):
-        
-       Recording.__init__(self, directory, experiment_index, recording_index, mmap_timestamps)  
        
-       with open(os.path.join(self.directory, 'structure.oebin'), 'r') as oebin_file:
+    def __init__(
+        self, directory, experiment_index=0, recording_index=0, mmap_timestamps=True
+    ):
+
+        Recording.__init__(
+            self, directory, experiment_index, recording_index, mmap_timestamps
+        )
+
+        with open(os.path.join(self.directory, "structure.oebin"), "r") as oebin_file:
             self.info = json.load(oebin_file)
-       self._format = 'binary'
-       self._version = float(".".join(self.info['GUI version'].split('.')[:2]))
-       self.sort_events = True       
-       
+        self._format = "binary"
+        self._version = float(".".join(self.info["GUI version"].split(".")[:2]))
+        self.sort_events = True
+
+
     def load_continuous(self):
-        
+
         self._continuous = []
 
-        for info in self.info['continuous']:
-            
+        for info in self.info["continuous"]:
+
             try:
-                c = self.Continuous(info, self.directory, self._version, self.mmap_timestamps)
+                c = self.Continuous(
+                    info, self.directory, self._version, self.mmap_timestamps
+                )
             except FileNotFoundError as e:
-                print(info["folder_name"] + " missing file: '" + os.path.basename(e.filename) + "'")
+                print(
+                    info["folder_name"]
+                    + " missing file: '"
+                    + os.path.basename(e.filename)
+                    + "'"
+                )
             else:
                 self._continuous.append(c)
-            
+
     def load_spikes(self):
-        
+
         self._spikes = []
-        
-        self._spikes.extend([self.Spikes(info, self.directory, self._version) 
-                             for info in self.info['spikes']])
 
-    
+        self._spikes.extend(
+            [
+                self.Spikes(info, self.directory, self._version)
+                for info in self.info["spikes"]
+            ]
+        )
+
     def load_events(self):
-
         import numpy as np
 
         search_string = os.path.join(self.directory,
@@ -400,27 +445,32 @@ class BinaryRecording(Recording):
                                     'TTL*')
         
         events_directories = glob.glob(search_string)
-        
+
         df = []
-        
+
         streamIdx = -1
-        
+
         for events_directory in events_directories:
-            
-            node_name = os.path.basename(os.path.dirname(events_directory)).split('.')
+
+            node_name_orig = os.path.basename(os.path.dirname(events_directory))
+            node_name = node_name_orig.split(".")
             node = node_name[0]
             nodeId = int(node.split("-")[-1])
-            stream = ''.join(node_name[1:])
-            
+            stream = "".join(node_name[1:])
+
             streamIdx += 1
-            
+
             if self._version >= 0.6:
-                channels = np.load(os.path.join(events_directory, 'states.npy'))
-                sample_numbers = np.load(os.path.join(events_directory, 'sample_numbers.npy'))
-                timestamps = np.load(os.path.join(events_directory, 'timestamps.npy'))
+                channels = np.load(os.path.join(events_directory, "states.npy"))
+                sample_numbers = np.load(
+                    os.path.join(events_directory, "sample_numbers.npy")
+                )
+                timestamps = np.load(os.path.join(events_directory, "timestamps.npy"))
             else:
-                channels = np.load(os.path.join(events_directory, 'channel_states.npy'))
-                sample_numbers = np.load(os.path.join(events_directory, 'timestamps.npy'))
+                channels = np.load(os.path.join(events_directory, "channel_states.npy"))
+                sample_numbers = np.load(
+                    os.path.join(events_directory, "timestamps.npy")
+                )
                 timestamps = np.ones(sample_numbers.shape) * -1
         
             # Check for global samples
@@ -464,16 +514,6 @@ class BinaryRecording(Recording):
                             if rising.size > falling.size:
                                 rising = rising[:-1]
 
-                            # # ensure that the number of rising and falling edges are the same:
-                            # if len(rising) != len(falling):
-                            #     print(
-                            #         f"Channel {channel} has {len(rising)} rising edges and "
-                            #         f"{len(falling)} falling edges. The number of rising and "
-                            #         f"falling edges should be equal. Skipping events from this channel."
-                            #     )
-                            #     continue
-
-
                         durations = sample_numbers[falling] - sample_numbers[rising]
                         durations = durations / self.continuous[0].metadata["sample_rate"]
                         channel_samples = sample_numbers[rising]
@@ -482,42 +522,42 @@ class BinaryRecording(Recording):
                         channel_global_timestamps = global_timestamps[rising]            
 
                         if cont_samples is not False:
-                            # Find indices
-                            # indices = np.where(np.isin(cont_samples, channel_samples))[0]
-                            # Faster method
                             indices = channel_samples - cont_samples[0]
 
-                        df.append(pd.DataFrame(data = {'line' :  [channel] * len(durations),
-                                        'sample_number' : channel_samples,  
-                                        'sample_index'  : indices,             
-                                        'global_sample_index': channel_global_samples,
-                                        'timestamp' : channel_timestamps,
-                                        'global_timestamp' : channel_global_timestamps,
-                                        'duration' : durations,
-                                        'processor_id' : [nodeId] * len(durations),
-                                        'stream_index' : [streamIdx] * len(durations),
-                                        'stream_name' : [stream] * len(durations)}
-                                        ))
-
-
+                        df.append(
+                        	pd.DataFrame(
+                        		data = {
+                        			'line' :  [channel] * len(durations),
+									'sample_number' : channel_samples,  
+									'sample_index'  : indices,             
+									'global_sample_index': channel_global_samples,
+									'timestamp' : channel_timestamps,
+									'global_timestamp' : channel_global_timestamps,
+									'duration' : durations,
+									'processor_id' : [nodeId] * len(durations),
+									'stream_index' : [streamIdx] * len(durations),
+									'stream_name' : [stream] * len(durations)
+								}
+							)
+						)
 
         if len(df) > 0:
 
             self._events = pd.concat(df)
 
             if self.sort_events:
-                if self._version >= 0.6:                  
-                    self._events.sort_values(by=['stream_index', 'sample_number'], 
-                                             ignore_index=True,
-                                             inplace=True)
+                if self._version >= 0.6:
+                    self._events.sort_values(
+                        by=["timestamp", "stream_index"],
+                        ignore_index=True,
+                        inplace=True,
+                    )
                 else:
-                    self._events.sort_values(by=['stream_index', 'sample_number'], 
-                                             ignore_index=True,
-                                             inplace=True)
-        
-        else:
-            
-            self._events = None
+                    self._events.sort_values(
+                        by=["sample_number", "stream_index"],
+                        ignore_index=True,
+                        inplace=True,
+                    )
     
     def load_barcode_data(self):
         self.barcode_data = {}
@@ -533,18 +573,14 @@ class BinaryRecording(Recording):
                 loaded_barcodes = False
         return loaded_barcodes
         
-
     def load_messages(self):
-        
+
         if self._version >= 0.6:
-            search_string = os.path.join(self.directory,
-                            'events',
-                            'MessageCenter')
+            search_string = os.path.join(self.directory, "events", "MessageCenter")
         else:
-            search_string = os.path.join(self.directory,
-                            'events',
-                            'Message_Center-904.0', 'TEXT_group_1'
-                            )
+            search_string = os.path.join(
+                self.directory, "events", "Message_Center-904.0", "TEXT_group_1"
+            )
 
         msg_center_dir = glob.glob(search_string)
 
@@ -555,17 +591,26 @@ class BinaryRecording(Recording):
             msg_center_dir = msg_center_dir[0]
 
             if self._version >= 0.6:
-                sample_numbers = np.load(os.path.join(msg_center_dir, 'sample_numbers.npy'))
-                timestamps = np.load(os.path.join(msg_center_dir, 'timestamps.npy'))
+                sample_numbers = np.load(
+                    os.path.join(msg_center_dir, "sample_numbers.npy")
+                )
+                timestamps = np.load(os.path.join(msg_center_dir, "timestamps.npy"))
             else:
-                sample_numbers = np.load(os.path.join(msg_center_dir, 'timestamps.npy'))
+                sample_numbers = np.load(os.path.join(msg_center_dir, "timestamps.npy"))
                 timestamps = np.zeros(sample_numbers.shape) * -1
 
-            text = [msg.decode('utf-8') for msg in np.load(os.path.join(msg_center_dir, 'text.npy'))]
+            text = [
+                msg.decode("utf-8")
+                for msg in np.load(os.path.join(msg_center_dir, "text.npy"))
+            ]
 
-            df = pd.DataFrame(data = { 'sample_number' : sample_numbers,
-                    'timestamp' : timestamps,
-                    'message' : text} )
+            df = pd.DataFrame(
+                data={
+                    "sample_number": sample_numbers,
+                    "timestamp": timestamps,
+                    "message": text,
+                }
+            )
 
         if len(df) > 0:
 
@@ -577,73 +622,78 @@ class BinaryRecording(Recording):
 
     def __str__(self):
         """Returns a string with information about the Recording"""
-        
-        return "Open Ephys GUI Recording\n" + \
-                "ID: " + hex(id(self)) + '\n' + \
-                "Format: Binary\n" + \
-                "Directory: " + self.directory + "\n" + \
-                "Experiment Index: " + str(self.experiment_index) + "\n" + \
-                "Recording Index: " + str(self.recording_index)
-    
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+        return (
+            "Open Ephys GUI Recording\n"
+            + "ID: "
+            + hex(id(self))
+            + "\n"
+            + "Format: Binary\n"
+            + "Directory: "
+            + self.directory
+            + "\n"
+            + "Experiment Index: "
+            + str(self.experiment_index)
+            + "\n"
+            + "Recording Index: "
+            + str(self.recording_index)
+        )
+
     #####################################################################
-    
+
     @staticmethod
     def detect_format(directory):
-        binary_files = glob.glob(os.path.join(directory, 'experiment*', 'recording*'))
-        
+        binary_files = glob.glob(os.path.join(directory, "experiment*", "recording*"))
+
         if len(binary_files) > 0:
             return True
         else:
             return False
-    
+
     @staticmethod
     def detect_recordings(directory, mmap_timestamps=True):
-        
+
         recordings = []
-        
-        experiment_directories = glob.glob(os.path.join(directory, 'experiment*'))
+
+        experiment_directories = glob.glob(os.path.join(directory, "experiment*"))
         experiment_directories.sort(key=alphanum_key)
 
         for experiment_index, experiment_directory in enumerate(experiment_directories):
-             
-            recording_directories = glob.glob(os.path.join(experiment_directory, 'recording*'))
+
+            recording_directories = glob.glob(
+                os.path.join(experiment_directory, "recording*")
+            )
             recording_directories.sort(key=alphanum_key)
-            
-            for recording_index, recording_directory in enumerate(recording_directories):
-            
-                recordings.append(BinaryRecording(recording_directory, 
-                                                       experiment_index,
-                                                       recording_index,
-                                                       mmap_timestamps))
-                
+
+            for recording_index, recording_directory in enumerate(
+                recording_directories
+            ):
+
+                recordings.append(
+                    BinaryRecording(
+                        recording_directory,
+                        experiment_index,
+                        recording_index,
+                        mmap_timestamps,
+                    )
+                )
+
         return recordings
 
     @staticmethod
     def create_oebin_file(
-        output_path, 
+        output_path,
         stream_name="example_data",
         channel_count=16,
-        sample_rate=30000.,
+        sample_rate=30000.0,
         bit_volts=0.195,
         source_processor_name=None,
-        source_processor_id=100):
-
+        source_processor_id=100,
+    ):
         """
         Generates structure.oebin (JSON) file for one data stream
 
-        A minimal directory structure for the Binary format looks 
+        A minimal directory structure for the Binary format looks
         like this:
 
         data-directory/
@@ -652,8 +702,8 @@ class BinaryRecording(Recording):
                     continuous.dat
             structure.oebin
 
-        To export a [samples x channels] numpy array, A (in microvolts), into 
-        a .dat file, use the following code: 
+        To export a [samples x channels] numpy array, A (in microvolts), into
+        a .dat file, use the following code:
 
         >> A_scaled = A / bit_volts # usually 0.195
         >> A_scaled.astype('int16').tofile('/path/to/continuous.dat')
@@ -674,8 +724,8 @@ class BinaryRecording(Recording):
         source_processor_name : string
             name of the processor that generated this data (optional)
         source_processor_id : string
-            3-digit identifier of the processor that generated this data (optional)
-        
+            3-digit identifier of the processor that generated this data
+            (optional)
         """
 
         output = dict()
@@ -683,21 +733,21 @@ class BinaryRecording(Recording):
 
         if source_processor_name is None:
             source_processor_name = stream_name
-        
-        output["continuous"] = [{
-            "folder_name" : stream_name,
-            "sample_rate" : sample_rate,
-            "stream_name" : stream_name,
-            "source_processor_id" : source_processor_id,
-            "source_processor_name" : stream_name,
-            "num_channels" : channel_count,
-            "channels": [{
-                    "channel_name" : "CH" + str(i+1),
-                    "bit_volts" : bit_volts
-                    } for i in range(channel_count)]
-        }]
 
-        with open(os.path.join(
-            output_path, 
-            'structure.oebin'), "w") as outfile:
+        output["continuous"] = [
+            {
+                "folder_name": stream_name,
+                "sample_rate": sample_rate,
+                "stream_name": stream_name,
+                "source_processor_id": source_processor_id,
+                "source_processor_name": stream_name,
+                "num_channels": channel_count,
+                "channels": [
+                    {"channel_name": "CH" + str(i + 1), "bit_volts": bit_volts}
+                    for i in range(channel_count)
+                ],
+            }
+        ]
+
+        with open(os.path.join(output_path, "structure.oebin"), "w") as outfile:
             outfile.write(json.dumps(output, indent=4))
