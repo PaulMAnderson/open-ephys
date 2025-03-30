@@ -423,10 +423,17 @@ class BinaryRecording(Recording):
                 sample_numbers = np.load(os.path.join(events_directory, 'timestamps.npy'))
                 timestamps = np.ones(sample_numbers.shape) * -1
         
-            # Try to get global time stamps too
-            global_filepath = os.path.join(events_directory, 'global_timestamps.npy')
-            if os.path.exists(global_filepath):
-                global_timestamps = np.load(global_filepath)
+            # Check for global samples
+            global_samples_filepath = os.path.join(events_directory, 'global_samples.npy')
+            if os.path.exists(global_samples_filepath):
+                global_samples = np.load(global_samples_filepath)
+            else:
+                global_samples = np.ones_like(timestamps) * np.nan
+
+            # Try to get global timestamps too
+            global_timestamps_filepath = os.path.join(events_directory, 'global_timestamps.npy')
+            if os.path.exists(global_timestamps_filepath):
+                global_timestamps = np.load(global_timestamps_filepath)
             else:
                 global_timestamps = np.ones_like(timestamps) * np.nan
 
@@ -470,6 +477,7 @@ class BinaryRecording(Recording):
                         durations = sample_numbers[falling] - sample_numbers[rising]
                         durations = durations / self.continuous[0].metadata["sample_rate"]
                         channel_samples = sample_numbers[rising]
+                        channel_global_samples = global_samples[rising]
                         channel_timestamps = timestamps[rising]        
                         channel_global_timestamps = global_timestamps[rising]            
 
@@ -481,7 +489,8 @@ class BinaryRecording(Recording):
 
                         df.append(pd.DataFrame(data = {'line' :  [channel] * len(durations),
                                         'sample_number' : channel_samples,  
-                                        'sample_index'  : indices,                      
+                                        'sample_index'  : indices,             
+                                        'global_sample_index': channel_global_samples,
                                         'timestamp' : channel_timestamps,
                                         'global_timestamp' : channel_global_timestamps,
                                         'duration' : durations,

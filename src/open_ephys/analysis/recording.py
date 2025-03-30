@@ -285,11 +285,10 @@ class Recording(ABC):
         channel_map = {}
         
         for i,c in enumerate(channel_names):
-            if c.startswith('CH'):
-                try:
-                    ch_id = int(c.lstrip('CH'))
-                except:
-                    ch_id = i+1
+            if c.startswith('CH_SYNC'):
+                ch_id = i
+            elif c.startswith('CH'):
+                ch_id = int(c.lstrip('CH'))
             elif c.startswith('ADC'):
                 ch_id = i+1
             else:
@@ -533,8 +532,8 @@ class Recording(ABC):
                                 (self.events.stream_name == stream_name) &
                                 (self.events.line == line)]
             
-            # Sort events by timestamp
-            events_sorted = events.sort_values('sample_number')
+            # Sort events by sample_index
+            events_sorted = events.sort_values('sample_index')
                     
             # Decode barcodes
             # Get durations of pulses in ms
@@ -542,24 +541,23 @@ class Recording(ABC):
             durations[events_sorted.pulse_type == 'short'] = short_duration
             closest_multiple = np.round(durations / long_duration) * long_duration
             durations[events_sorted.pulse_type == 'long'] = closest_multiple[events_sorted.pulse_type == 'long'] 
+            
             # convert sample numbers to timestamps
-            timestamps = (events_sorted.sample_number.values / self._continuous[0].metadata['sample_rate'])
+            timestamps = (events_sorted.sample_index.values / self._continuous[0].metadata['sample_rate'])
+            events_sorted['sample_index'] = events_sorted.sample_index.values
             events_sorted['timestamp'] = timestamps
             events_sorted['duration'] = durations
-
-            # Get intervals between pulses in ms
-            # intervals = np.diff(timestamps)
-            # intervals_ms = intervals * 1000
 
             barcodes = self._decode_barcodes(events_sorted)
             
             barcode_values = [barcode['barcode_value'] for barcode in barcodes]
+            barcode_latencies = [barcode['start_latency'] for barcode in barcodes]
             barcode_timestamps = [barcode['start_time'] for barcode in barcodes]
 
             # Convert into a structured NumPy array with named fields
             barcode_data = np.array(
-                list(zip(barcode_values, barcode_timestamps)),
-                dtype=[("values", "i4"), ("timestamps", "f8")]  # "O" for generic object type, "f8" for float64
+                list(zip(barcode_values, barcode_latencies, barcode_timestamps)),
+                dtype=[("values", "i4"), ("latencies", "i4"), ("timestamps", "f8")]  # "O" for generic object type, "f8" for float64
                 )
                 
             self.barcode_data[(processor_id, stream_name)] = barcode_data
@@ -630,15 +628,28 @@ class Recording(ABC):
             stream_times = stream_barcodes["timestamps"][stream_mask]
             main_times   = main_barcodes["timestamps"][main_mask]
 
-            # Sort by stream timestamps to ensure proper interpolation
+            # We also want to interpolate the indices to synchonize the events
+            stream_indices = stream_barcodes["latencies"][stream_mask]
+            main_indices   = main_barcodes["latencies"][main_mask]
+
+            # Sort to ensure proper interpolation
             sorted_indices = np.argsort(stream_times)
             stream_times = np.array(stream_times)[sorted_indices]
             main_times = np.array(main_times)[sorted_indices]
+            stream_indices = np.array(stream_indices)[sorted_indices]
+            main_indices = np.array(main_indices)[sorted_indices]
                                 
             # Create interpolation function
-            interp_func = interp1d(
+            time_interp_func = interp1d(
                 stream_times, 
                 main_times, 
+                kind='linear', 
+                bounds_error=False, 
+                fill_value='extrapolate'
+            )
+            index_interp_func = interp1d(
+                stream_indices, 
+                main_indices, 
                 kind='linear', 
                 bounds_error=False, 
                 fill_value='extrapolate'
@@ -647,131 +658,26 @@ class Recording(ABC):
             if key == main_key:
                 # assign the raw timestamps as global timestamps if this is the main key
                 continuous.global_timestamps = np.array(continuous.timestamps)
-                self.synchronize_events(continuous, interp_func)
+                self.synchronize_events(continuous, index_interp_func, time_interp_func)
                 continue
 
             # Use interpolation to align timestamps
             timestamps = continuous.timestamps
-            continuous.global_timestamps = interp_func(timestamps)
+            continuous.global_timestamps = time_interp_func(timestamps)
             # # Calculate sample numbers for each timestamp
             # sample_rate = continuous.metadata['sample_rate']
             # # Can't use actual timestamps as they are often corrupted, using sample numbers instead
             # timestamps = continuous.sample_numbers / sample_rate      
             
             # Attempt to fix the event timestamps
-            self.synchronize_events(continuous, interp_func)
+            self.synchronize_events(continuous, index_interp_func, time_interp_func)
 
         # Save the results for future use
         self.save_global_timestamps()
         # Reload the event data
         self.load_events()
 
-
         return True
-
-    # def _decode_barcodes(self, events_sorted):
-    #     """
-    #     Decode barcodes from a dataframe of pulse data, including gaps as zeros.
-        
-    #     Parameters:
-    #     events_sorted: pandas DataFrame with columns:
-    #         - 'pulse_type': 'short' or 'long'
-    #         - 'duration': duration in ms
-    #         - 'timestamp': start time of the pulse in seconds
-            
-    #     Returns:
-    #     A list of dictionaries, each containing:
-    #         - 'barcode_value': Decoded integer value
-    #         - 'binary_string': Full binary string representation
-    #         - 'start_time': Start time of the barcode in seconds
-    #         - 'end_time': End time of the barcode in seconds
-    #     """
-    #     import pandas as pd
-    #     import numpy as np
-        
-    #     barcodes = []
-    #     i = 0
-        
-    #     # Process all events in the sorted dataframe
-    #     while i < len(events_sorted):
-    #         # Find the starting short pulse
-    #         if events_sorted.iloc[i]['pulse_type'] == 'short':
-    #             start_time = events_sorted.iloc[i]['timestamp']
-    #             current_time = start_time + (events_sorted.iloc[i]['duration'] / 1000)
-    #             i += 1  # Move past the starting short pulse
-                
-    #             # Reset barcode data for this new detection
-    #             binary_string = ""
-                
-    #             # Process all pulses and gaps until we find the ending short pulse
-    #             found_ending_short = False
-    #             while i < len(events_sorted):
-    #                 pulse = events_sorted.iloc[i]
-                    
-    #                 # Check if we've found the ending short pulse
-    #                 if pulse['pulse_type'] == 'short':
-    #                     found_ending_short = True
-    #                     # There is a 10 ms delay before a short pulse begins
-    #                     end_time = pulse['timestamp'] - (pulse['duration'] / 1000)     
-    #                     break
-                        
-    #                 # Check if there's a gap before this pulse
-    #                 gap_duration = (pulse['timestamp'] - current_time) * 1000  # Convert seconds to ms
-    #                 if gap_duration >= 25:  # Using 25ms consistently as threshold for gaps
-    #                     # Count gap as zeros (every 30ms = one '0')
-    #                     num_zeros = int(round(gap_duration / 30))
-    #                     binary_string += "0" * num_zeros
-                    
-    #                 # Process the long pulse as ones
-    #                 if pulse['pulse_type'] == 'long':
-    #                     num_bits = round(pulse['duration'] / 30)
-    #                     binary_string += "1" * num_bits
-                    
-    #                 # Update current time to the end of this pulse
-    #                 current_time = pulse['timestamp'] + (pulse['duration'] / 1000)  # Convert ms back to seconds
-    #                 i += 1
-                    
-    #             # If we found a complete barcode (with ending short pulse)
-    #             if found_ending_short:
-    #                 # Check if we need to add trailing zeros based on any gap before the ending pulse
-    #                 gap_duration = (end_time - current_time) * 1000  # Convert seconds to ms
-    #                 if gap_duration >= 25:
-    #                     num_zeros = int(round(gap_duration / 30))
-    #                     binary_string += "0" * num_zeros
-                        
-    #                 # Check if we have exactly 32 bits
-    #                 if len(binary_string) == 32:
-    #                     # Convert binary string to integer
-    #                     barcode_value = int(binary_string, 2)
-                        
-    #                     barcodes.append({
-    #                         'barcode_value': barcode_value,
-    #                         'binary_string': binary_string,
-    #                         'start_time': start_time,
-    #                         'end_time': end_time
-    #                     })
-    #                 else:
-    #                     print(f"Warning: Found a barcode with {len(binary_string)} bits instead of 32 bits: {binary_string}")
-    #                     # Optional: add partial barcodes to the results with a flag
-    #                     barcodes.append({
-    #                         'barcode_value': None,  # or compute anyway
-    #                         'binary_string': binary_string,
-    #                         'start_time': start_time,
-    #                         'end_time': end_time,
-    #                         'is_valid': False,
-    #                         'bit_length': len(binary_string)
-    #                     })
-                    
-    #                 # Move to the next pulse after the ending short pulse
-    #                 i += 1
-    #             else:
-    #                 # If we didn't find an ending short pulse, move to the next event
-    #                 i += 1
-    #         else:
-    #             # If the current pulse isn't a starting short pulse, move to the next one
-    #             i += 1
-                    
-    #     return barcodes
 
     def _decode_barcodes(self, events_sorted, n_bits=32, interval=30, init_duration=10, pulse_duration=30, tolerance=0.1):
         """
@@ -811,10 +717,10 @@ class Recording(ABC):
                 a = 1
             else:
                 start_time = barcode_events.iloc[0]['timestamp']
-                start_latency = barcode_events.iloc[0]['sample_number']
+                start_latency = barcode_events.iloc[0]['sample_index']
                 pulse_end = barcode_events.iloc[0]['timestamp'] + 2 * (barcode_events.iloc[0]['duration'] / 1000)
                 end_time = barcode_events.iloc[-1]['timestamp']
-                end_latency = barcode_events.iloc[-1]['sample_number']
+                end_latency = barcode_events.iloc[-1]['sample_index']
                 last_pulse_time = barcode_events.iloc[-1]['timestamp'] - (barcode_events.iloc[-1]['duration'] / 1000)
             
             # Remove wrapper events
@@ -974,7 +880,7 @@ class Recording(ABC):
         print("Failed to synchronize timestamps")
         return False
     
-    def synchronize_events(self,continuous, interp_func):
+    def synchronize_events(self,continuous, sample_interp_func, timestamp_interp_func):
         """
         Attempts to synchronise event data using the barcode approach. 
         Relies on global timestamps having been calculated.
@@ -982,26 +888,36 @@ class Recording(ABC):
         """
 
         import numpy as np
-        processor_id = continuous.metadata['source_node_id']
-        stream_name  = continuous.metadata['stream_name']
 
         # Annoying we dont have the events directories saved...
         # Maybe make a full class analgous to the continuous one?
         event_path = continuous.directory.replace('continuous', 'events') + 'TTL'
         if os.path.exists(event_path):
-            timestamps = np.load(os.path.join(event_path, 'timestamps.npy'))
-            # Alternative method where we regenerate timestamps
-            # not needed as we already do this now
-            # samples    = np.load(os.path.join(event_path,'sample_numbers.npy'))
-            # new_timestamps = samples / continuous.metadata['sample_rate']
 
-            # Convert timestamps to global timestamps
-            global_timestamps = interp_func(timestamps)
+            # Get the stream name from the continuous data
+            stream_name  = continuous.metadata['stream_name']
+            events = self.events[self.events['stream_name'] == stream_name]
+
+            samples = np.load(os.path.join(event_path, 'sample_numbers.npy'))
+            # Need to adjust these to match the sample_indices
+            sample_shift = events.iloc[0]['sample_number'] - events.iloc[0]['sample_index']
+            samples = samples - sample_shift
+            global_samples = sample_interp_func(samples)
+
+            # Save the global samples
+            global_samples_file = os.path.join(event_path, 'global_samples.npy')
+            np.save(global_samples_file, global_samples)
+            print(f"New global event samples saved to {global_samples_file}")
+
+            # now timestamps
+            timestamps = np.load(os.path.join(event_path, 'timestamps.npy'))
+            global_timestamps = timestamp_interp_func(timestamps)
 
             # Save the global timestamps
-            global_file = os.path.join(event_path, 'global_timestamps.npy')
-            np.save(global_file, global_timestamps)
-            print(f"New global event timestamps saved to {global_file}")
+            global_timestamps_file = os.path.join(event_path, 'global_timestamps.npy')
+            np.save(global_timestamps_file, global_timestamps)
+            print(f"New global event samples saved to {global_timestamps_file}")
+
 
     def concatenate_events(self, other, save_data=True, output_dir=None):
         import pandas as pd
@@ -1039,8 +955,10 @@ class Recording(ABC):
             # Subset the DataFrame for the current stream
             stream_events = other_events[other_events['stream_name'] == stream_name].copy()
             
-            # Add samples tom sampl_index column
+            # Add samples tom sample_index column
             stream_events['sample_index'] += num_samples
+            # Add samples to global_sample_index column
+            stream_events['global_sample_index'] += num_samples
             # Add time offset to timestamp column
             stream_events['timestamp'] += last_timestamp
             # Add time offset to global_timestamp column
