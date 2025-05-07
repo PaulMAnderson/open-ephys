@@ -50,10 +50,10 @@ continuous = recording.continuous
 events = recording.events
 
 
+recording.sync
+
 daq_events = events[events['stream_name'] == 'PXIe-6341']
 laser_events = daq_events[daq_events['line'].isin([8])]
 
 chan = 1
 laser_start_global_time = laser_events.iloc[0].global_timestamp
-
-a = continuous[0].get_data(start_time=100)
